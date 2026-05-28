@@ -3,8 +3,11 @@
 
 pub mod data;
 pub mod model;
+pub mod outer;
+pub mod params;
 pub mod tokenizer;
 
 pub use data::Dataset;
 pub use model::{Config, GptModel};
+pub use outer::OuterOptimizer;
 pub use tokenizer::CharTokenizer;

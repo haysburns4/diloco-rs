@@ -13,3 +13,4 @@ candle-nn = { workspace = true }
 serde = { workspace = true }
 anyhow = { workspace = true }
 rand = { workspace = true }
+safetensors = { workspace = true }

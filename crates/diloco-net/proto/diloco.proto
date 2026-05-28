@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package diloco;
+
+// The coordinator owns the authoritative global parameters and the outer
+// optimizer state. Workers pull the initial parameters, then exchange their
+// locally-trained parameters for the averaged result once per round.
+service Diloco {
+  // Fetch the initial global parameters before round 1.
+  rpc Init(InitRequest) returns (ParamMsg);
+
+  // Submit this worker's locally-trained parameters for `round`. The call
+  // blocks until every worker has submitted, then returns the new global
+  // parameters produced by the outer optimizer (a synchronous all-reduce).
+  rpc AllReduce(AllReduceRequest) returns (ParamMsg);
+}
+
+message InitRequest {
+  uint32 rank = 1;
+}
+
+message AllReduceRequest {
+  uint32 rank = 1;
+  uint64 round = 2;
+  // safetensors-serialized map of parameter name -> tensor.
+  bytes params = 3;
+}
+
+message ParamMsg {
+  // safetensors-serialized global parameters.
+  bytes params = 1;
+}

@@ -1,0 +1,17 @@
+[package]
+name = "diloco-net"
+version = "0.1.0"
+edition = "2021"
+
+# Transport layer: the gRPC service definition and the generated client/server
+# stubs that carry parameter payloads between workers and the coordinator. The
+# averaging math lives in diloco-core; this crate only moves bytes.
+[dependencies]
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+prost = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
+# Bundles a protoc binary so the build needs nothing installed system-wide.
+protoc-bin-vendored = { workspace = true }

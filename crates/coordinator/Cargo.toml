@@ -1,13 +1,14 @@
 [package]
-name = "worker"
+name = "coordinator"
 version = "0.1.0"
 edition = "2021"
 
-# A DiLoCo training node. Each round it runs the inner optimizer (AdamW) for K
-# steps on its own data shard, then exchanges parameters with the coordinator
-# (all-reduce) to get the new global parameters for the next round.
+# DiLoCo's outer-optimizer process. It holds the authoritative global
+# parameters, waits for all workers to submit each round (a synchronous
+# barrier), averages their pseudo-gradients, applies the outer optimizer, and
+# broadcasts the new global parameters back.
 [[bin]]
-name = "worker"
+name = "coordinator"
 path = "src/main.rs"
 
 [dependencies]
@@ -19,6 +20,5 @@ tokio = { workspace = true }
 tonic = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
-rand = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
