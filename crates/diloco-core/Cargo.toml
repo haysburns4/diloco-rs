@@ -1,0 +1,15 @@
+[package]
+name = "diloco-core"
+version = "0.1.0"
+edition = "2021"
+
+# Shared building blocks used by every node in a DiLoCo run: the char
+# tokenizer, the batch sampler, and the tiny transformer. Keeping these in a
+# library means a future coordinator binary can reuse the same model
+# definition (it needs the parameter shapes to average them).
+[dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+rand = { workspace = true }
