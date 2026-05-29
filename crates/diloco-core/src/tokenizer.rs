@@ -9,10 +9,9 @@ pub struct CharTokenizer {
 
 impl CharTokenizer {
     pub fn from_text(text: &str) -> Self {
-        let mut chars: Vec<char> = text.chars().collect::<std::collections::BTreeSet<_>>()
+        let chars: Vec<char> = text.chars().collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
-        chars.sort_unstable();
         let stoi = chars
             .iter()
             .enumerate()
