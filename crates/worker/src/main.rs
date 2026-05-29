@@ -116,7 +116,10 @@ async fn main() -> Result<()> {
 
     let mut client = connect_with_retry(&args.coordinator).await?;
 
-    // Pull theta^(0) and load it into the local model.
+    // Pull the current global parameters and the round to start from. For a
+    // fresh start the coordinator returns round=1 and θ⁰. For a restarting
+    // worker it returns the live round and the current θ so the worker
+    // fast-forwards without re-training rounds it missed.
     let init = client
         .init(InitRequest { rank: args.rank })
         .await
@@ -124,6 +127,11 @@ async fn main() -> Result<()> {
         .into_inner();
     let global = params::deserialize(&init.params, &device)?;
     params::load_into_varmap(&mut varmap, &global)?;
+    let mut round = init.round;
+
+    if round > 1 {
+        warn!(rank = args.rank, round, "resyncing to coordinator round (missed earlier rounds)");
+    }
 
     // Rank 0 records the comparison metrics. The model shares storage with the
     // varmap, so after each `load_into_varmap` it reflects the global weights;
@@ -151,7 +159,7 @@ async fn main() -> Result<()> {
         info!(rank = args.rank, round = 0u64, val_loss = val, "initial eval");
     }
 
-    for round in 1..=args.rounds {
+    while round <= args.rounds {
         // Fresh inner optimizer each round: the global parameters just changed
         // underneath us, so stale AdamW moments would be meaningless.
         let mut optimizer = AdamW::new(
@@ -174,16 +182,40 @@ async fn main() -> Result<()> {
         }
 
         // All-reduce: send local params, receive the new averaged global.
+        // On FailedPrecondition the coordinator has moved on (e.g. a timeout
+        // closed the round while this worker was training); call Init to resync
+        // to the current round and retry from there.
         let local_bytes = params::serialize(&params::varmap_tensors(&varmap))?;
-        let reply = client
+        let reply = match client
             .all_reduce(AllReduceRequest {
                 rank: args.rank,
                 round,
                 params: local_bytes,
             })
             .await
-            .with_context(|| format!("AllReduce RPC failed at round {round}"))?
-            .into_inner();
+        {
+            Ok(r) => r.into_inner(),
+            Err(status) if status.code() == tonic::Code::FailedPrecondition => {
+                warn!(
+                    rank = args.rank,
+                    round,
+                    "round mismatch — coordinator moved on; resyncing"
+                );
+                let resync = client
+                    .init(InitRequest { rank: args.rank })
+                    .await
+                    .context("resync Init RPC failed")?
+                    .into_inner();
+                let new_global = params::deserialize(&resync.params, &device)?;
+                params::load_into_varmap(&mut varmap, &new_global)?;
+                round = resync.round;
+                // Skip metrics for this iteration; the inner training we just
+                // did was on stale params and is discarded.
+                continue;
+            }
+            Err(e) => return Err(e).context(format!("AllReduce RPC failed at round {round}")),
+        };
+
         let new_global = params::deserialize(&reply.params, &device)?;
         params::load_into_varmap(&mut varmap, &new_global)?;
 
@@ -207,6 +239,9 @@ async fn main() -> Result<()> {
         }
 
         info!(rank = args.rank, round, inner_loss = last_loss, "round complete");
+        // Advance to the round the coordinator says to enter next. Under normal
+        // operation this equals round + 1; under resync it may jump forward.
+        round = reply.round;
     }
 
     info!(rank = args.rank, "worker finished");

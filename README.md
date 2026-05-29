@@ -37,8 +37,8 @@ A small character-level transformer on a bundled public-domain text corpus (an e
 | Tensor serialization + inter-worker communication (safetensors over gRPC) | ✅ Done |
 | Outer optimizer (Nesterov on pseudo-gradients) | ✅ Done |
 | Full DiLoCo inner/outer loop | ✅ Done |
-| Fault tolerance (worker join/leave, round resync) | ⚙️ WIP |
-| True non-IID data sharding (currently seed-offset per rank) | 🔲 Planned |
+| Fault tolerance (worker join/leave, round resync) | ✅ Done |
+| True non-IID data sharding (currently seed-offset per rank) | ⚙️ WIP |
 | Synchronous baseline for comparison | ✅ Done |
 | Experiments (varying K, non-IID data split) | 🔲 Planned |
 

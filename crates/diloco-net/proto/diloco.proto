@@ -29,4 +29,9 @@ message AllReduceRequest {
 message ParamMsg {
   // safetensors-serialized global parameters.
   bytes params = 1;
+  // The coordinator's current round when this message was sent.
+  // For Init responses this is the round workers should start from.
+  // For AllReduce responses this is the next round to enter.
+  // Workers use this to detect and recover from round drift.
+  uint64 round = 2;
 }
