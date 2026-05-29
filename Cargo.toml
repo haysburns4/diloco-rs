@@ -5,6 +5,7 @@ members = [
     "crates/diloco-net",
     "crates/worker",
     "crates/coordinator",
+    "crates/baseline",
 ]
 
 # Shared dependency versions for every crate in the workspace. Member crates

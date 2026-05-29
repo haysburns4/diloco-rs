@@ -1,6 +1,23 @@
 use candle_core::{Device, Result, Tensor};
 use rand::Rng;
 
+/// Split a token stream into a training prefix and a validation suffix.
+/// `val_frac` is the fraction held out for validation (e.g. 0.1 = last 10%).
+/// Every node splits the same corpus the same way, so the train and val sets
+/// are identical across the DiLoCo workers and the synchronous baseline.
+pub fn train_val_split(tokens: Vec<u32>, val_frac: f64) -> (Vec<u32>, Vec<u32>) {
+    assert!(
+        (0.0..1.0).contains(&val_frac),
+        "val_frac must be in [0, 1), got {val_frac}"
+    );
+    let val_len = (tokens.len() as f64 * val_frac) as usize;
+    let split = tokens.len() - val_len;
+    let val = tokens[split..].to_vec();
+    let mut train = tokens;
+    train.truncate(split);
+    (train, val)
+}
+
 /// Holds the entire corpus as a flat sequence of token ids and serves random
 /// contiguous windows for next-token prediction.
 pub struct Dataset {

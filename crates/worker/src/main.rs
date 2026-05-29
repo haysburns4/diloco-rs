@@ -1,11 +1,13 @@
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
 use candle_nn::{loss, AdamW, Optimizer, ParamsAdamW, VarBuilder, VarMap};
 use clap::Parser;
-use diloco_core::{params, CharTokenizer, Config, Dataset, GptModel};
+use diloco_core::{
+    eval_loss, params, train_val_split, CharTokenizer, Config, Dataset, GptModel, MetricsLogger,
+};
 use diloco_net::{AllReduceRequest, DilocoClient, InitRequest, MAX_MESSAGE_SIZE};
 use rand::{rngs::StdRng, SeedableRng};
 use tonic::transport::{Channel, Endpoint};
@@ -38,6 +40,17 @@ struct Args {
     /// Corpus path (must match the coordinator's so the vocabulary lines up).
     #[arg(long, default_value = "data/input.txt")]
     corpus: PathBuf,
+    /// Fraction of the corpus held out for validation (last `val_frac`).
+    #[arg(long, default_value_t = 0.1)]
+    val_frac: f64,
+    /// Max validation batches per eval (0 = use the whole val set).
+    #[arg(long, default_value_t = 0)]
+    eval_batches: usize,
+    /// Optional CSV path for per-round metrics. Only rank 0 writes it; the row
+    /// reflects the synced global model and aggregates compute/communication
+    /// across all workers.
+    #[arg(long)]
+    metrics: Option<PathBuf>,
 }
 
 async fn connect_with_retry(addr: &str) -> Result<DilocoClient<Channel>> {
@@ -74,7 +87,10 @@ async fn main() -> Result<()> {
     let tokenizer = CharTokenizer::from_text(&text);
     let tokens = tokenizer.encode(&text);
     let cfg = Config::tiny(tokenizer.vocab_size());
-    let dataset = Dataset::new(tokens, cfg.block_size);
+    // Train on the leading split; rank 0 evaluates on the held-out tail. The
+    // baseline splits the identical corpus the same way, so the val set matches.
+    let (train_tokens, val_tokens) = train_val_split(tokens, args.val_frac);
+    let dataset = Dataset::new(train_tokens, cfg.block_size);
 
     // Different seed per rank => each worker sees a different stream of batches,
     // i.e. data-parallel training across workers.
@@ -108,6 +124,32 @@ async fn main() -> Result<()> {
         .into_inner();
     let global = params::deserialize(&init.params, &device)?;
     params::load_into_varmap(&mut varmap, &global)?;
+
+    // Rank 0 records the comparison metrics. The model shares storage with the
+    // varmap, so after each `load_into_varmap` it reflects the global weights;
+    // evaluating it gives the held-out loss of the synced global model.
+    let mut metrics = match (args.rank, &args.metrics) {
+        (0, Some(path)) => Some(MetricsLogger::create(path)?),
+        _ => None,
+    };
+    let per_worker_bytes = params::allreduce_bytes_per_worker(&global)?;
+    let start = Instant::now();
+    let eval = |model: &GptModel| {
+        eval_loss(
+            model,
+            &val_tokens,
+            cfg.block_size,
+            args.batch_size,
+            args.eval_batches,
+            &device,
+        )
+    };
+    if let Some(logger) = metrics.as_mut() {
+        // Round 0: the shared theta^(0), before any training or communication.
+        let val = eval(&model)?;
+        logger.log(0, 0, 0.0, 0, val, f32::NAN)?;
+        info!(rank = args.rank, round = 0u64, val_loss = val, "initial eval");
+    }
 
     for round in 1..=args.rounds {
         // Fresh inner optimizer each round: the global parameters just changed
@@ -144,6 +186,25 @@ async fn main() -> Result<()> {
             .into_inner();
         let new_global = params::deserialize(&reply.params, &device)?;
         params::load_into_varmap(&mut varmap, &new_global)?;
+
+        if let Some(logger) = metrics.as_mut() {
+            // Aggregate compute and communication across all workers: each round
+            // every worker processes `inner_steps * batch_size` sequences and
+            // performs one all-reduce event.
+            let total_samples =
+                round * args.inner_steps as u64 * args.world_size as u64 * args.batch_size as u64;
+            let comm_bytes = round * args.world_size as u64 * per_worker_bytes as u64;
+            let val = eval(&model)?;
+            logger.log(
+                round,
+                total_samples,
+                start.elapsed().as_secs_f64(),
+                comm_bytes,
+                val,
+                last_loss,
+            )?;
+            info!(rank = args.rank, round, val_loss = val, "round eval");
+        }
 
         info!(rank = args.rank, round, inner_loss = last_loss, "round complete");
     }

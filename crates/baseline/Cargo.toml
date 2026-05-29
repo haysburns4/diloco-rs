@@ -1,0 +1,23 @@
+[package]
+name = "baseline"
+version = "0.1.0"
+edition = "2021"
+
+# Synchronous data-parallel baseline for comparing against DiLoCo. Simulates N
+# data-parallel workers in a single process: every step it averages the
+# gradients of N per-shard batches and applies one AdamW update (mathematically
+# exact synchronous DDP). Reuses diloco-core so the model, data, optimizer,
+# evaluation and metrics are identical to the DiLoCo run.
+[[bin]]
+name = "baseline"
+path = "src/main.rs"
+
+[dependencies]
+diloco-core = { path = "../diloco-core" }
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+rand = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

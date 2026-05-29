@@ -31,6 +31,12 @@ struct Args {
     /// Outer-optimizer Nesterov momentum.
     #[arg(long, default_value_t = 0.9)]
     outer_momentum: f64,
+    /// Optional path for the shared initial parameters (theta^(0)). If the file
+    /// exists it is loaded as theta^(0); otherwise the freshly-initialized
+    /// theta^(0) is saved there. Lets the synchronous baseline start from the
+    /// exact same weights (Candle's CPU RNG can't be seeded, so we share a file).
+    #[arg(long)]
+    init: Option<PathBuf>,
 }
 
 /// Mutable state guarded by a single async mutex. Round handling is fully
@@ -141,7 +147,22 @@ async fn main() -> Result<()> {
     let varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
     let _model = GptModel::new(&cfg, vb)?;
-    let global = params::varmap_tensors(&varmap);
+
+    // Establish theta^(0). With --init we either load shared weights (so the
+    // baseline starts identically) or persist the freshly-initialized ones.
+    let global = match &args.init {
+        Some(path) if path.exists() => {
+            info!(path = %path.display(), "loading shared initial parameters");
+            params::load_file(path, &device)?
+        }
+        Some(path) => {
+            let global = params::varmap_tensors(&varmap);
+            params::save_file(path, &global)?;
+            info!(path = %path.display(), "saved initial parameters for sharing");
+            global
+        }
+        None => params::varmap_tensors(&varmap),
+    };
     let init_bytes = params::serialize(&global)?;
     let outer = OuterOptimizer::new(&global, args.outer_lr, args.outer_momentum)?;
 

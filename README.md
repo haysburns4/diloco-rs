@@ -39,7 +39,7 @@ A small character-level transformer on a bundled public-domain text corpus (an e
 | Full DiLoCo inner/outer loop | ✅ Done |
 | Fault tolerance (worker join/leave, round resync) | ⚙️ WIP |
 | True non-IID data sharding (currently seed-offset per rank) | 🔲 Planned |
-| Synchronous baseline for comparison | 🔲 Planned |
+| Synchronous baseline for comparison | ✅ Done |
 | Experiments (varying K, non-IID data split) | 🔲 Planned |
 
 
@@ -75,6 +75,47 @@ To wire the processes up by hand (e.g. across machines — only the address chan
 ./target/release/worker --rank 0 --world-size 2 --coordinator <coordinator-host>:7000
 ./target/release/worker --rank 1 --world-size 2 --coordinator <coordinator-host>:7000
 ```
+
+
+## Comparing against a synchronous baseline
+
+The point of DiLoCo is to **match the final loss of standard synchronous
+data-parallel training while communicating far less**. To check that claim,
+`scripts/run_comparison.sh` runs both and compares them:
+
+```bash
+scripts/run_comparison.sh [NUM_WORKERS] [ROUNDS] [INNER_STEPS]   # defaults: 2 30 50
+```
+
+It (1) trains a DiLoCo cluster, (2) trains the synchronous baseline (the
+`baseline` binary, which simulates N data-parallel workers in one process by
+averaging their per-step gradients), and (3) writes `runs/metrics_diloco.csv`
+and `runs/metrics_sync.csv`, then prints a quantitative summary (final
+validation loss, total communication, and the reduction factor).
+
+What makes the comparison credible:
+
+- **Same everything but synchronization.** Both runs share the model, corpus,
+  90/10 train/val split, AdamW learning rate, per-rank data seeds, evaluation,
+  and metrics — all from `diloco-core`. They even start from the *same* random
+  weights (the coordinator saves `theta^(0)` to a file the baseline loads, since
+  Candle can't seed the CPU RNG). The only difference is that DiLoCo syncs once
+  every `INNER_STEPS` steps and the baseline syncs every step.
+- **Matched compute.** The baseline runs `ROUNDS × INNER_STEPS` global steps, so
+  it processes the same total sequences as DiLoCo's `N` workers combined. The
+  two curves' x-axis (`total_samples`) lines up point-for-point.
+- **Honest communication accounting.** One all-reduce event costs `2 ×
+  payload_bytes` per worker (upload local + download reduced), measured from the
+  actual safetensors encoding. DiLoCo logs one event per round; the baseline one
+  per step. At matched compute the ratio is exactly `INNER_STEPS`.
+- **Held-out metric.** Both report validation loss over the same fixed,
+  deterministic val windows — not noisy per-shard training loss.
+
+The headline is **validation loss at matched compute vs cumulative bytes
+communicated**: DiLoCo reaches the baseline's loss for ~`INNER_STEPS` times less
+communication. (Wall-clock is logged too, but on localhost it reflects compute,
+not network transfer, so it does *not* capture DiLoCo's real-world advantage —
+communication volume is the credible axis.)
 
 
 ## References
