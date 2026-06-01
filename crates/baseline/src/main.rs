@@ -27,7 +27,8 @@ use candle_core::{DType, Device};
 use candle_nn::{loss, AdamW, Optimizer, ParamsAdamW, VarBuilder, VarMap};
 use clap::Parser;
 use diloco_core::{
-    eval_loss, params, train_val_split, CharTokenizer, Config, Dataset, GptModel, MetricsLogger,
+    eval_loss, params, train_val_split, CharTokenizer, Config, DataShardingMode, Dataset, GptModel,
+    MetricsLogger,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use tracing::info;
@@ -61,6 +62,12 @@ struct Args {
     /// Max validation batches per eval (0 = use the whole val set).
     #[arg(long, default_value_t = 0)]
     eval_batches: usize,
+    /// Training data sharding across the simulated workers: `iid` (each samples
+    /// the whole corpus, differing only by seed) or `non-iid-contiguous` (each
+    /// gets a distinct contiguous chunk). Matches the DiLoCo worker flag so the
+    /// two runs differ only in synchronization granularity.
+    #[arg(long, default_value = "iid")]
+    data_sharding: DataShardingMode,
     /// Optional path to shared initial parameters (theta^(0)). If present it is
     /// loaded so the baseline starts from the exact same weights as DiLoCo.
     #[arg(long)]
@@ -86,7 +93,25 @@ fn main() -> Result<()> {
     let tokens = tokenizer.encode(&text);
     let cfg = Config::tiny(tokenizer.vocab_size());
     let (train_tokens, val_tokens) = train_val_split(tokens, args.val_frac);
-    let dataset = Dataset::new(train_tokens, cfg.block_size);
+
+    // One dataset per simulated worker, sharded exactly like the DiLoCo workers:
+    // IID => each sees the whole corpus; non-IID => each its own contiguous chunk.
+    let mut datasets = Vec::with_capacity(args.world_size);
+    for rank in 0..args.world_size {
+        let shard = args
+            .data_sharding
+            .shard(rank, args.world_size, train_tokens.len());
+        info!(
+            rank,
+            mode = %args.data_sharding,
+            chunk_start = shard.start,
+            chunk_end = shard.end,
+            chunk_tokens = shard.len(),
+            preview = %shard.preview(&train_tokens, &tokenizer, 50),
+            "training data shard"
+        );
+        datasets.push(Dataset::from_shard(&train_tokens, shard, cfg.block_size)?);
+    }
 
     let mut varmap = VarMap::new();
     let model = {
@@ -158,8 +183,8 @@ fn main() -> Result<()> {
         // mean loss. Each shard contributes the same number of tokens, so this
         // is the exact synchronous data-parallel update.
         let mut losses = Vec::with_capacity(args.world_size);
-        for rng in rngs.iter_mut() {
-            let (inputs, targets) = dataset.batch(args.batch_size, &device, rng)?;
+        for (rank, rng) in rngs.iter_mut().enumerate() {
+            let (inputs, targets) = datasets[rank].batch(args.batch_size, &device, rng)?;
             let logits = model.forward(&inputs)?;
             let (b, t, v) = logits.dims3()?;
             losses.push(loss::cross_entropy(

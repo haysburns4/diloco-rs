@@ -38,9 +38,16 @@ A small character-level transformer on a bundled public-domain text corpus (an e
 | Outer optimizer (Nesterov on pseudo-gradients) | ✅ Done |
 | Full DiLoCo inner/outer loop | ✅ Done |
 | Fault tolerance (worker join/leave, round resync) | ✅ Done |
-| True non-IID data sharding (currently seed-offset per rank) | ⚙️ WIP |
+| True non-IID data sharding (`--data-sharding non-iid-contiguous`) | ✅ Done |
 | Synchronous baseline for comparison | ✅ Done |
 | Experiments (varying K, non-IID data split) | 🔲 Planned |
+<!-- 
+| Write-up of DiLoCo's claim, experimental methodology, validation loss curves, communication volume comparison, K-sweep showing the communication-vs-convergence tradeoff, non-IID data results, honest discussion and learnings | 🔲 Planned | 
+
+Synchronous DDP's invariant is that all replicas hold identical weights at all times. For that to hold, every process must apply the same update — so they must agree on the averaged gradient before stepping. If they skipped the all-reduce and each applied only its own g_i, the two copies would immediately diverge and you'd no longer have one model being trained — you'd have two different models. Keeping them in lockstep is what forces communication every step.
+
+DiLoCo's insight is precisely to relax that invariant: let each worker diverge freely for K steps on its own copy, then reconcile once. Tolerating divergence is what buys the K× fewer communication events.
+-->
 
 
 ## Build
@@ -62,18 +69,28 @@ scripts/run_local.sh [NUM_WORKERS] [ROUNDS]   # defaults: 2 workers, 20 rounds
 Override the corpus or listen address with environment variables:
 
 ```bash
-CORPUS=data/input.txt ADDR=127.0.0.1:7000 scripts/run_local.sh 4 50
+CORPUS=data/input.txt ADDR=127.0.0.1:7070 scripts/run_local.sh 4 50
 ```
+
+#### IID vs. non-IID data
+
+By default every worker samples from the whole training corpus (`--data-sharding iid`), so workers differ only by RNG seed. To test DiLoCo's robustness to non-IID data, split the corpus into N contiguous chunks — one per worker — with `--data-sharding non-iid-contiguous`. Each worker then trains on a structurally distinct slice; the held-out validation set stays shared. At startup each worker logs its chunk range, size, and a decoded text preview so you can confirm they see different content. The `run_local.sh` and `run_comparison.sh` scripts expose this via the `DATA_SHARDING` env var:
+
+```bash
+DATA_SHARDING=non-iid-contiguous scripts/run_local.sh 4 50
+```
+
+If a chunk ends up too small to hold even one training window (too many workers for the corpus), the worker fails fast with a message suggesting fewer workers, a larger corpus, or IID mode.
 
 To wire the processes up by hand (e.g. across machines — only the address changes):
 
 ```bash
 # coordinator: waits for `world-size` workers each round
-./target/release/coordinator --listen 0.0.0.0:7000 --world-size 2
+./target/release/coordinator --listen 0.0.0.0:7070 --world-size 2
 
 # workers: rank 0..N-1, each dialing the coordinator
-./target/release/worker --rank 0 --world-size 2 --coordinator <coordinator-host>:7000
-./target/release/worker --rank 1 --world-size 2 --coordinator <coordinator-host>:7000
+./target/release/worker --rank 0 --world-size 2 --coordinator <coordinator-host>:7070
+./target/release/worker --rank 1 --world-size 2 --coordinator <coordinator-host>:7070
 ```
 
 

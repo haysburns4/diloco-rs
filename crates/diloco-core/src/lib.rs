@@ -9,7 +9,7 @@ pub mod outer;
 pub mod params;
 pub mod tokenizer;
 
-pub use data::{train_val_split, Dataset};
+pub use data::{train_val_split, DataShardingMode, Dataset, Shard};
 pub use eval::eval_loss;
 pub use metrics::MetricsLogger;
 pub use model::{Config, GptModel};

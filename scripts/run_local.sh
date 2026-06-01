@@ -11,12 +11,15 @@ cd "$(dirname "$0")/.."
 NUM_WORKERS="${1:-2}"
 ROUNDS="${2:-20}"
 CORPUS="${CORPUS:-data/input.txt}"
-ADDR="${ADDR:-127.0.0.1:7000}"
+# Port 7070, not 7000: macOS AirPlay Receiver (Control Center) listens on 7000.
+ADDR="${ADDR:-127.0.0.1:7070}"
+# Data sharding across workers: iid | non-iid-contiguous (see worker --help).
+DATA_SHARDING="${DATA_SHARDING:-iid}"
 
 echo "Building (release)..."
 cargo build --release --bin coordinator --bin worker
 
-echo "Starting coordinator on ${ADDR} (world-size=${NUM_WORKERS})"
+echo "Starting coordinator on ${ADDR} (world-size=${NUM_WORKERS}, sharding=${DATA_SHARDING})"
 ./target/release/coordinator \
     --listen "${ADDR}" \
     --world-size "${NUM_WORKERS}" \
@@ -34,7 +37,8 @@ for ((rank = 0; rank < NUM_WORKERS; rank++)); do
         --world-size "${NUM_WORKERS}" \
         --coordinator "${ADDR}" \
         --rounds "${ROUNDS}" \
-        --corpus "${CORPUS}" &
+        --corpus "${CORPUS}" \
+        --data-sharding "${DATA_SHARDING}" &
     WORKER_PIDS+=($!)
 done
 

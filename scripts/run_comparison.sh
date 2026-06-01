@@ -21,7 +21,11 @@ NUM_WORKERS="${1:-2}"
 ROUNDS="${2:-30}"
 INNER_STEPS="${3:-50}"
 CORPUS="${CORPUS:-data/input.txt}"
-ADDR="${ADDR:-127.0.0.1:7000}"
+# Port 7070, not 7000: macOS AirPlay Receiver (Control Center) listens on 7000.
+ADDR="${ADDR:-127.0.0.1:7070}"
+# Data sharding for both runs: iid | non-iid-contiguous. Set
+# DATA_SHARDING=non-iid-contiguous to test DiLoCo under non-IID data.
+DATA_SHARDING="${DATA_SHARDING:-iid}"
 
 OUT="runs"
 INIT="${OUT}/init.safetensors"
@@ -36,7 +40,7 @@ echo "Building (release)..."
 cargo build --release --bin coordinator --bin worker --bin baseline
 
 echo
-echo "=== [1/3] DiLoCo: ${NUM_WORKERS} workers x ${ROUNDS} rounds x ${INNER_STEPS} inner steps ==="
+echo "=== [1/3] DiLoCo: ${NUM_WORKERS} workers x ${ROUNDS} rounds x ${INNER_STEPS} inner steps (sharding=${DATA_SHARDING}) ==="
 ./target/release/coordinator \
     --listen "${ADDR}" \
     --world-size "${NUM_WORKERS}" \
@@ -61,6 +65,7 @@ for ((rank = 0; rank < NUM_WORKERS; rank++)); do
         --rounds "${ROUNDS}" \
         --inner-steps "${INNER_STEPS}" \
         --corpus "${CORPUS}" \
+        --data-sharding "${DATA_SHARDING}" \
         ${METRICS_ARG[@]+"${METRICS_ARG[@]}"} &
     WORKER_PIDS+=($!)
 done
@@ -85,6 +90,7 @@ echo "=== [2/3] Synchronous baseline: same compute, loading shared theta^(0) ===
     --rounds "${ROUNDS}" \
     --inner-steps "${INNER_STEPS}" \
     --corpus "${CORPUS}" \
+    --data-sharding "${DATA_SHARDING}" \
     --init "${INIT}" \
     --metrics "${SYNC_CSV}"
 

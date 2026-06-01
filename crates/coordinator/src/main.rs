@@ -18,7 +18,8 @@ use tracing::{info, warn};
 #[derive(Parser)]
 #[command(about = "DiLoCo coordinator (outer optimizer)")]
 struct Args {
-    #[arg(long, default_value = "127.0.0.1:7000")]
+    /// Address to listen on for worker connections. Defaults to port 7070
+    #[arg(long, default_value = "127.0.0.1:7070")]
     listen: String,
     /// Number of workers expected each round.
     #[arg(long)]

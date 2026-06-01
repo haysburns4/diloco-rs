@@ -6,7 +6,8 @@ use candle_core::{DType, Device};
 use candle_nn::{loss, AdamW, Optimizer, ParamsAdamW, VarBuilder, VarMap};
 use clap::Parser;
 use diloco_core::{
-    eval_loss, params, train_val_split, CharTokenizer, Config, Dataset, GptModel, MetricsLogger,
+    eval_loss, params, train_val_split, CharTokenizer, Config, DataShardingMode, Dataset, GptModel,
+    MetricsLogger,
 };
 use diloco_net::{AllReduceRequest, DilocoClient, InitRequest, MAX_MESSAGE_SIZE};
 use rand::{rngs::StdRng, SeedableRng};
@@ -46,6 +47,12 @@ struct Args {
     /// Max validation batches per eval (0 = use the whole val set).
     #[arg(long, default_value_t = 0)]
     eval_batches: usize,
+    /// Training data sharding: `iid` (every worker samples the whole corpus,
+    /// differing only by seed) or `non-iid-contiguous` (each worker gets a
+    /// distinct contiguous chunk). The held-out validation set is shared either
+    /// way. Must match across all workers for the chunks to tile the corpus.
+    #[arg(long, default_value = "iid")]
+    data_sharding: DataShardingMode,
     /// Optional CSV path for per-round metrics. Only rank 0 writes it; the row
     /// reflects the synced global model and aggregates compute/communication
     /// across all workers.
@@ -90,10 +97,26 @@ async fn main() -> Result<()> {
     // Train on the leading split; rank 0 evaluates on the held-out tail. The
     // baseline splits the identical corpus the same way, so the val set matches.
     let (train_tokens, val_tokens) = train_val_split(tokens, args.val_frac);
-    let dataset = Dataset::new(train_tokens, cfg.block_size);
 
-    // Different seed per rank => each worker sees a different stream of batches,
-    // i.e. data-parallel training across workers.
+    // This worker's slice of the *training* corpus. IID => the whole corpus
+    // (workers differ only by seed); non-IID => a distinct contiguous chunk, so
+    // each worker trains on a genuinely different data distribution.
+    let shard = args
+        .data_sharding
+        .shard(args.rank as usize, args.world_size, train_tokens.len());
+    info!(
+        rank = args.rank,
+        mode = %args.data_sharding,
+        chunk_start = shard.start,
+        chunk_end = shard.end,
+        chunk_tokens = shard.len(),
+        preview = %shard.preview(&train_tokens, &tokenizer, 50),
+        "training data shard"
+    );
+    let dataset = Dataset::from_shard(&train_tokens, shard, cfg.block_size)?;
+
+    // Different seed per rank => each worker draws a different stream of batches
+    // from its shard.
     let mut rng = StdRng::seed_from_u64(1234 + args.rank as u64);
 
     // The model is built with random init, but those values are immediately
