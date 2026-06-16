@@ -62,6 +62,10 @@ struct Args {
     /// Max validation batches per eval (0 = use the whole val set).
     #[arg(long, default_value_t = 0)]
     eval_batches: usize,
+    /// Experiment seed. Offsets each simulated worker's data-sampling RNG, mirroring
+    /// the DiLoCo worker's `--seed` so a (config, seed) pair draws the same streams.
+    #[arg(long, default_value_t = 0)]
+    seed: u64,
     /// Training data sharding across the simulated workers: `iid` (each samples
     /// the whole corpus, differing only by seed) or `non-iid-contiguous` (each
     /// gets a distinct contiguous chunk). Matches the DiLoCo worker flag so the
@@ -140,10 +144,10 @@ fn main() -> Result<()> {
         },
     )?;
 
-    // One RNG per simulated worker, seeded exactly like the DiLoCo workers so
-    // each "rank" sees the same data stream it would there.
+    // One RNG per simulated worker, seeded exactly like the DiLoCo workers
+    // (matching `--seed`) so each "rank" sees the same data stream it would there.
     let mut rngs: Vec<StdRng> = (0..args.world_size)
-        .map(|rank| StdRng::seed_from_u64(1234 + rank as u64))
+        .map(|rank| StdRng::seed_from_u64(args.seed.wrapping_mul(10_000) + 1234 + rank as u64))
         .collect();
 
     let per_worker_bytes = params::allreduce_bytes_per_worker(&params::varmap_tensors(&varmap))?;

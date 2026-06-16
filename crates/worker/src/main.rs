@@ -47,6 +47,12 @@ struct Args {
     /// Max validation batches per eval (0 = use the whole val set).
     #[arg(long, default_value_t = 0)]
     eval_batches: usize,
+    /// Experiment seed. Offsets each worker's data-sampling RNG so repeated runs
+    /// draw independent batch streams (for error bars across seeds). Model init
+    /// is separately randomized by the coordinator (Candle's CPU RNG can't be
+    /// seeded), so distinct seeds give genuinely independent runs.
+    #[arg(long, default_value_t = 0)]
+    seed: u64,
     /// Training data sharding: `iid` (every worker samples the whole corpus,
     /// differing only by seed) or `non-iid-contiguous` (each worker gets a
     /// distinct contiguous chunk). The held-out validation set is shared either
@@ -115,9 +121,9 @@ async fn main() -> Result<()> {
     );
     let dataset = Dataset::from_shard(&train_tokens, shard, cfg.block_size)?;
 
-    // Different seed per rank => each worker draws a different stream of batches
-    // from its shard.
-    let mut rng = StdRng::seed_from_u64(1234 + args.rank as u64);
+    // Distinct stream per (seed, rank): the seed separates experiment repeats,
+    // the rank separates workers within a run.
+    let mut rng = StdRng::seed_from_u64(args.seed.wrapping_mul(10_000) + 1234 + args.rank as u64);
 
     // The model is built with random init, but those values are immediately
     // overwritten by the global parameters fetched from the coordinator, so all
